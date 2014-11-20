@@ -6,8 +6,9 @@ module CassandraAudits
     attr_reader :loaded
     alias :loaded? :loaded
       
-    def initialize
+    def initialize(table_name)
       @loaded = false
+      @table_name = table_name
     end
     
     def limit(value)
@@ -40,14 +41,10 @@ module CassandraAudits
       find_last
     end
       
-    def inspect
-      to_a.inspect
-    end
-      
     def to_a
       return @records if loaded?
       @records = CassandraMigrations::Cassandra
-      .select(:audits, build_query).to_a
+      .select(@table_name, build_query).to_a
       .collect {|data| CassandraAudits.audit_class.name.constantize.new(data, true) } 
       @loaded = true      
       @records

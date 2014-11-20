@@ -1,4 +1,5 @@
 require 'cassandra_audits/query'
+require 'cassandra_audits/worker'
 
 module CassandraAudits
   # Specify this act if you want changes to your model to be saved in an
@@ -15,11 +16,11 @@ module CassandraAudits
   # for configuration options
   module Auditor
     extend ActiveSupport::Concern
-    
+
     CALLBACKS = [:audit_create, :audit_update, :audit_destroy].freeze
-    
+
     module ClassMethods
-      
+
       # == Configuration options
       #
       #
@@ -49,7 +50,7 @@ module CassandraAudits
       def audited(options = {})
         # don't allow multiple calls
         return if self.included_modules.include?(CassandraAudits::Auditor::AuditedInstanceMethods)
-        
+
 
         class_attribute :non_audited_columns,   :instance_writer => false
         class_attribute :auditing_enabled,      :instance_writer => false
@@ -58,7 +59,7 @@ module CassandraAudits
         class_attribute :store_objects_info, :instance_writer => false
         class_attribute :audit_object_transformers, :instance_writer => false
         class_attribute :columns_association_filter, :instance_writer => false
-       
+
         if options[:only]
           except = self.column_names - options[:only].flatten.map(&:to_s)
         else
@@ -81,11 +82,12 @@ module CassandraAudits
             end
           end
         end
+
         self.audit_associated_with = options[:associated_with]
         self.audit_object_transformers = HashWithIndifferentAccess.new( options[:transformers])
         self.columns_association_filter = options[:columns_association_filter]
-        
-        #        
+
+        #
         #        # Define and set an after_audit callback. This might be useful if you want
         #        # to notify a party after the audit has been created.
         #        define_callbacks :audit
@@ -106,34 +108,24 @@ module CassandraAudits
         (klazz.send(:after_update, :audit_update)) if !options[:on] || (options[:on] && options[:on].include?(:update))
         (klazz.send(:after_commit, :audit_destroy)) if !options[:on] || (options[:on] && options[:on].include?(:destroy))
       end
-      
+
     end
-    
+
     module AuditedInstanceMethods
-      
-      def audits
-        CassandraAudits::Query.new
+
+      def audits(model)
+        CassandraAudits::Query.new("#{model}_audits")
       end
-      
+
       # List of attributes that are audited.
       def audited_attributes
-        #        filter_attributes(attributes) do
-        #          attributes.except(*non_audited_columns).inject({}) do |changes,(attr, value)|
-        #            changes[attr] = transform(attr, value).first if value.present?
-        #            changes
-        #          end
-        #        end
 
         filter_attributes(attributes) do |changes, attr, value|
           transform(attr, value).first if value.present?
         end
       end
-      
+
       def audited_changes
-        #        changed_attributes.except(*non_audited_columns).inject({}) do |changes,(attr, old_value)|
-        #          changes[attr] = transform(attr, old_value, self[attr]) if [old_value, self[attr]].all? { |attr| attr.present? }
-        #          changes
-        #        end
         filter_attributes(changed_attributes) do |changes, attr, old_value|
           transform(attr, old_value, self[attr]) if [old_value, self[attr]].all? { |attr| attr.present? }
         end
@@ -142,111 +134,101 @@ module CassandraAudits
       private
       def filter_attribute(attr)
         return {} if columns_association_filter.blank?
-        
+
         columns_association_filter.reduce({}) do |sum, (klazz, fields)|
           found = fields.detect {|field| field == attr }
           sum[klazz] = found if found
           sum
         end
       end
-      
+
       def filter_attributes(attrs)
-        
+
         attrs.except(*non_audited_columns).inject({}) do |changes,(attr, value)|
           diff = yield(changes, attr, value)
           changes[attr] = diff if diff.present?
           changes
         end
-        
+
       end
-      
+
       def audit_create
         write_audit(:action => "create", :audited_changes => audited_attributes)
       end
-      
+
       def audit_update
         if (changes = audited_changes).present?
-          write_audit(:action => "update", :audited_changes => changes) 
+          write_audit(:action => "update", :audited_changes => changes)
         end
       end
-      
+
       def audit_destroy
         if destroyed?
-          params = {:action => "destroy", :audited_changes => ""}
-          
+
+          params = {:action => "destroy", :audited_changes => audited_attributes}
+
           write_audit(params)
+
         end
       end
-      
+
       def write_audit(attrs)
         return unless auditing_enabled
-        
-        
-        attrs.merge!({:auditable_type => self.class.name, :auditable_id => self.id})
-        associate_with_parent(attrs)
-        store_audit_objects_info(attrs)
-        audits = [attrs]
-        if attrs[:associated_id].present? 
-          associated_ids = [attrs.delete(:associated_id)].flatten.uniq
-          audits = audits.reduce([]) do |sum, audit|
-            associated_ids.each do |id|
-              sum << audit.merge(:associated_id => id)
-            end
-            sum
-          end
-        end
-        if attrs[:audited_changes].present?
-          if columns_association_filter.present?
-            filtered = {}
-            columns_association_filter.each do |klazz, fields|
-              filtered[klazz] = {}
-            end
-            attrs[:audited_changes].each do |attr, data|
-              if filter = filter_attribute(attr.to_sym)
-                filter.each do |klazz, field|
-                  filtered[klazz][attr] = data
-                end
-              end
-            end
-            if filtered.any? {|k,v| v.present?  }
-              audits = audits.reduce([]) do |sum, audit|
-                filtered.each do |klazz, fields|
-                  associated_id = klazz == audit[:auditable_type] ? audit[:auditable_id] : audit[:associated_id]
-                  next if fields.blank? || associated_id.blank?
-                  sum << audit.merge(
-                    :audited_changes => fields, 
-                    :associated_type => klazz, 
-                    :associated_id => associated_id
-                  ).merge!({:audit_destination_data => audit[:auditable_type].constantize.auditor_destination_data(audit[:associated_id]).to_json})
-                end
-                sum
-              end
-            end
-          end
-        else
-          attrs.delete(:audited_changes)
-        end
 
-        audits.each do |audit_data|
-          if audit_data[:associated_id].blank?
-            audit_data.delete(:associated_id)
-            audit_data.delete(:associated_type)
+        attrs.merge!({:auditable_type => self.class.name, :auditable_id => self.id})
+        data = CassandraAudits.audit_scope.const_get("UserInfo").new
+        data = data.take
+        associate_with_parent(attrs)
+
+        Resque.enqueue(CassandraAudits::Worker, attrs.merge(data),
+                       Usi::Year.current_year.to_short, I18n.locale)
+
+
+      end
+
+      def associate_with_parent(attrs)
+        if audit_associated_with.present?
+          reflection = lookup_for_reflection_by_klass(self, audit_associated_with)
+          if reflection.present?
+            attrs.merge!(:klazz => reflection.klass.name,
+                         :associated_id => lookup_for_key(self, reflection, reflection.foreign_key))
           end
-          audit_data[:audited_changes] = audit_data[:audited_changes].to_json.gsub(/\'/, "&#39;") if audit_data[:audited_changes].present? #Escape the \' char
-          persist(audit_data)
         end
       end
 
-      
-      
-      def persist(attrs)
-        audit = CassandraAudits.audit_class.name.constantize.new(attrs.merge!(:created_at => (Time.now.to_f*1000).to_i, :year_month => Time.now.strftime("%Y%m").to_i))
-        audit.save
+      def lookup_for_key(object, reflection, key)
+        unless object.is_a?(Array)
+          return object.send(key) if object.respond_to?(key)
+        else
+          return object.collect {|el| el.send(key) } if object.all? {|el| el.respond_to?(key) }
+        end
+
+        association_name = (reflection.through_reflection || reflection).name
+        if object.respond_to?(association_name)
+          associated_object = object.send(association_name)
+          reflection = lookup_for_reflection_by_klass(associated_object, audit_associated_with)
+          lookup_for_key(associated_object, reflection, key)
+        end
+      end
+
+      def lookup_for_reflection(object)
+        object.reflections.values.detect do |reflection|
+          yield(reflection)
+        end
+      end
+
+      def lookup_for_reflection_by_klass(object, klass)
+        lookup_for_reflection(object) do |reflection|
+          reflection.klass == klass
+        end
       end
 
       def transform(attr, *values)
         if transformation = audit_object_transformers[attr]
-          mappings = reflections[transformation.keys.first.to_sym].klass.where(:id => values).reduce({}) do |mapping, o|
+          # mappings = reflections[transformation.keys.first.to_sym].klass
+          # .where(:id => values)
+          mappings = [send(transformation.keys.first.to_sym)].flatten
+          .reduce({}) do |mapping, o|
             mapping[o.id] = [transformation.values.first].flatten.reduce({}) {|sum, t| sum[t] = o.try(t); sum }
             mapping
           end
@@ -255,54 +237,7 @@ module CassandraAudits
           values
         end
       end
-      
-      def store_audit_objects_info(attrs)
-        if store_objects_info
-          attrs[:audit_source_data] = audit_source_data.to_json if self.respond_to?(:audit_source_data)
-          attrs[:audit_destination_data] = audit_destination_data.to_json if self.respond_to?(:audit_destination_data)
-        end
-      end
-      
-      def associate_with_parent(attrs)
-        if audit_associated_with.present?
-          reflection = lookup_for_reflection_by_klass(self, audit_associated_with)
-          attrs.merge!(:associated_type => reflection.klass.name, :associated_id => lookup_for_key(self, reflection, reflection.foreign_key)) if reflection.present?
-        end
-      end
-      
-      def lookup_for_key(object, reflection, key)
-        unless object.is_a?(Array)
-          return object.send(key) if object.respond_to?(key)
-        else
-          return object.collect {|el| el.send(key) } if object.all? {|el| el.respond_to?(key) }
-        end
-        
-        association_name = (reflection.through_reflection || reflection).name
-        if object.respond_to?(association_name)
-          associated_object = object.send(association_name)
-          reflection = lookup_for_reflection_by_klass(associated_object, audit_associated_with)
-          lookup_for_key(associated_object, reflection, key)
-        end
-      end
-      
-      def lookup_for_reflection(object)
-        object.reflections.values.detect do |reflection|
-          yield(reflection)
-        end
-      end
-      
-      def lookup_for_reflection_by_klass(object, klass)
-        lookup_for_reflection(object) do |reflection|
-          reflection.klass == klass
-        end
-      end
-      
-      #      def lookup_for_reflection_by_foreign_key(object, foreign_key = "")
-      #        lookup_for_reflection(object) do |reflection|
-      #          reflection.foreign_key == foreign_key
-      #        end
-      #      end
-      
+
       CALLBACKS.each do |attr_name|
         alias_method "#{attr_name}_callback".to_sym, attr_name
       end
@@ -311,12 +246,12 @@ module CassandraAudits
       end
 
     end
-    
+
     module AuditedClassMethods
       def without_auditing(&block)
         auditing_was_enabled = auditing_enabled
         # disable auditing for caller
-        disable_auditing 
+        disable_auditing
         # disable auditing for associated models
         if audit_associations.present?
           hashed_audit_associations = audit_associations.reduce(Hash.new, :merge)
@@ -340,11 +275,16 @@ module CassandraAudits
         self.auditing_enabled = true
       end
     end
-    
+
     def self.write_audit(klazz, attrs = {})
-      attrs.merge!( {:created_at => (Time.now.to_f*1000).to_i, :year_month => Time.now.strftime("%Y%m").to_i, :auditable_type => klazz.name})  
-      
-      audit = CassandraAudits.audit_class.name.constantize.new(attrs)
+      attrs.merge!( {:created_at => (Time.now.to_f*1000).to_i, :auditable_type => klazz.name})
+
+      data = CassandraAudits.audit_scope.const_get("UserInfo").new(attrs)
+      data = data.take
+      attrs.merge!(data)
+      audit = CassandraAudits.audit_scope
+      .const_get("#{attrs.delete(:klazz).demodulize}#{CassandraAudits.audit_class.name.demodulize}")
+      .new(attrs)
       audit.save
     end
 

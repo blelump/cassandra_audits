@@ -15,7 +15,7 @@ module CassandraAudits
       # * <tt>comment</tt>: a comment set with the audit
       # * <tt>created_at</tt>: Time that the change was performed
       #
-      class Audit
+      class AuditWrapper
         include ::ActiveModel::Observing
         include ::ActiveSupport::Callbacks
 
@@ -66,10 +66,6 @@ module CassandraAudits
         end
 
         protected
-
-        def partition_key
-          raise "not implemented"
-        end
 
         private
 
