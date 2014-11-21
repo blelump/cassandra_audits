@@ -193,6 +193,9 @@ module CassandraAudits
             attrs.merge!(:klazz => reflection.klass.name,
                          :associated_id => lookup_for_key(self, reflection, reflection.foreign_key))
           end
+        else
+          attrs.merge!(:klazz => self.class.name,
+                       :associated_id => self.id)
         end
       end
 
