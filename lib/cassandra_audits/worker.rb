@@ -51,84 +51,78 @@ class CassandraAudits::Worker
 
         return if context.blank?
 
-        begin
-          unless destroy?
-            store_audit_objects_info(attrs)
-          else
-            attrs[:klazz] = klazz.audit_associated_with.try(:name)
-          end
-          audits = [attrs]
-
-          if attrs[:associated_id].present?
-            associated_ids = [attrs.delete(:associated_id)].flatten.uniq
-            audits = audits.reduce([]) do |sum, audit|
-              associated_ids.each do |id|
-                sum << audit.merge(:associated_id => id)
-              end
-              sum
-            end
-          end
-          if attrs[:audited_changes].present?
-            if columns_association_filter.present?
-              filtered = {}
-              columns_association_filter.each do |klazz, fields|
-                filtered[klazz] = {}
-              end
-              attrs[:audited_changes].each do |attr, data|
-                if filter = filter_attribute(attr.to_sym)
-                  filter.each do |klazz, field|
-                    filtered[klazz][attr] = data
-                  end
-                end
-              end
-              if filtered.any? {|k,v| v.present?  }
-                
-                audits = audits.reduce([]) do |sum, audit|
-                  filtered.each do |klazz, fields|
-                    associated_id = klazz == audit[:auditable_type] ? audit[:auditable_id] : audit[:associated_id]
-                    next if fields.blank? || associated_id.blank?
-                    sum << audit.merge(
-                      :audited_changes => fields,
-                      :klazz => klazz,
-                      :associated_id => associated_id
-                    )
-                    .merge!({:audit_destination_data => decorator.auditor_destination_data(audit[:associated_id]).to_json})
-                  end
-                  sum
-                end
-              end
-            end
-          else
-            attrs.delete(:audited_changes)
-          end
-
-          audits.each do |audit_data|
-            if audit_data[:associated_id].blank?
-              audit_data.delete(:associated_id)
-            end
-            if audit_data[:audited_changes].present? #Escape the \' char
-              audit_data[:audited_changes] = audit_data[:audited_changes]
-              .to_json.gsub(/\'/, "&#39;")
-            end
-          end
-
-          audits += audits.collect do |audit|
-            a = audit.dup
-            a[:klazz] = CassandraAudits.current_user_class
-            a
-          end
-
-          if decorator.respond_to?(:associate_nested)
-            decorator.associate_nested(audits)
-          end
-          puts audits
-          audits.each {|audit| persist(audit)  }
-
-        rescue Exception => e
-          puts e.message
-          puts e.backtrace
+        unless destroy?
+          store_audit_objects_info(attrs)
+        else
+          attrs[:klazz] = klazz.audit_associated_with.try(:name)
         end
-        return
+        audits = [attrs]
+
+        if attrs[:associated_id].present?
+          associated_ids = [attrs.delete(:associated_id)].flatten.uniq
+          audits = audits.reduce([]) do |sum, audit|
+            associated_ids.each do |id|
+              sum << audit.merge(:associated_id => id)
+            end
+            sum
+          end
+        end
+        if attrs[:audited_changes].present?
+          if columns_association_filter.present?
+            filtered = {}
+            columns_association_filter.each do |klazz, fields|
+              filtered[klazz] = {}
+            end
+            attrs[:audited_changes].each do |attr, data|
+              if filter = filter_attribute(attr.to_sym)
+                filter.each do |klazz, field|
+                  filtered[klazz][attr] = data
+                end
+              end
+            end
+            if filtered.any? {|k,v| v.present?  }
+
+              audits = audits.reduce([]) do |sum, audit|
+                filtered.each do |klazz, fields|
+                  associated_id = klazz == audit[:auditable_type] ? audit[:auditable_id] : audit[:associated_id]
+                  next if fields.blank? || associated_id.blank?
+                  sum << audit.merge(
+                    :audited_changes => fields,
+                    :klazz => klazz,
+                    :associated_id => associated_id
+                  )
+                  .merge!({:audit_destination_data => decorator.auditor_destination_data(audit[:associated_id]).to_json})
+                end
+                sum
+              end
+            end
+          end
+        else
+          attrs.delete(:audited_changes)
+        end
+
+        audits.each do |audit_data|
+          if audit_data[:associated_id].blank?
+            audit_data.delete(:associated_id)
+          end
+          if audit_data[:audited_changes].present? #Escape the \' char
+            audit_data[:audited_changes] = audit_data[:audited_changes]
+            .to_json.gsub(/\'/, "&#39;")
+          end
+        end
+
+        audits += audits.collect do |audit|
+          a = audit.dup
+          a[:klazz] = CassandraAudits.current_user_class
+          a
+        end
+
+        if decorator.respond_to?(:associate_nested)
+          decorator.associate_nested(audits)
+        end
+        audits.each {|audit| persist(audit)  }
+
+
       end
 
     end
