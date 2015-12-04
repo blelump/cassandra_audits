@@ -7,16 +7,16 @@ require "cassandra_audits/version"
 Gem::Specification.new do |s|
   s.name        = "cassandra_audits"
   s.version     = CassandraAudits::VERSION
-  s.authors     = ["TODO: Your name"]
-  s.email       = ["TODO: Your email"]
-  s.homepage    = "TODO"
-  s.summary     = "TODO: Summary of CassandraAudits."
-  s.description = "TODO: Description of CassandraAudits."
+  s.authors     = ["blelump"]
+  s.email       = ["blelump@ok.ok"]
+  s.homepage    = "https://github.com/blelump/cassandra_audits"
+  s.summary     = "User actions logging for Rails apps with Cassandra as backend"
+  s.description = s.summary
 
   s.files = Dir["{app,config,db,lib}/**/*"] + ["MIT-LICENSE", "Rakefile", "README.rdoc"]
   s.test_files = Dir["test/**/*"]
 
-  s.add_dependency "rails"#, "~> 3.2.13"
+  s.add_dependency "rails"
 
   s.add_development_dependency "sqlite3"
   s.add_development_dependency "rspec-rails"
