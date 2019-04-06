@@ -232,6 +232,7 @@ module CassandraAudits
           # .where(:id => values)
           mappings = [send(transformation.keys.first.to_sym)].flatten
           .reduce({}) do |mapping, o|
+            next(mapping) unless o
             mapping[o.id] = [transformation.values.first].flatten.reduce({}) {|sum, t| sum[t] = o.try(t); sum }
             mapping
           end
